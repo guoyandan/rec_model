@@ -11,17 +11,21 @@ class RecUserModel(tf.keras.Model):
     '''
     用户属性支持：用户姓名、用户点击数据(最近前三)、点赞数据（最近前三）、收藏数据（最贱前三）
     '''
-    def __init__(self,user_tag_vocabulary):
+
+    def __init__(self, user_tag_vocabulary):
         super().__init__()
         self.usertags_vector = StringLookup()
         self.usertags_vector.adapt(user_tag_vocabulary)
-        self.usertags_embedding = tf.keras.layers.Embedding(input_dim=len(self.usertags_vector.get_vocabulary()),output_dim=4)
+        self.usertags_embedding = tf.keras.layers.Embedding(input_dim=len(self.usertags_vector.get_vocabulary()),
+                                                            output_dim=4)
 
-    @tf.function(input_signature=({"usertags":tf.TensorSpec(shape=(None,None), dtype=tf.dtypes.string, name="usertags"),"age":tf.TensorSpec(shape=(None,None), dtype=tf.dtypes.float32, name="age")},))
+    @tf.function(input_signature=(
+    {"usertags": tf.TensorSpec(shape=(None, None), dtype=tf.dtypes.string, name="usertags"),
+     "age": tf.TensorSpec(shape=(None, None), dtype=tf.dtypes.float32, name="age")},))
     def call(self, inputs):
         tags_lookup = self.usertags_vector(inputs.get("usertags"))
-        user_embedding = tf.math.reduce_sum(self.usertags_embedding(tags_lookup),axis=-2,keepdims=False)
-        return user_embedding+inputs.get("age")
+        user_embedding = tf.math.reduce_sum(self.usertags_embedding(tags_lookup), axis=-2, keepdims=False)
+        return user_embedding + inputs.get("age")
 
 
 class RecItemModel(tf.keras.Model):
@@ -30,8 +34,10 @@ class RecItemModel(tf.keras.Model):
         self.usertags_vector = StringLookup()
         self.usertags_vector.adapt(item_tag_vocabulary)
         self.usertags_embedding = tf.keras.layers.Embedding(input_dim=len(self.usertags_vector.get_vocabulary()),
-                                                         output_dim=4)
-    @tf.function(input_signature=({"itemtags":tf.TensorSpec(shape=(None,None), dtype=tf.dtypes.string, name="itemtags")},))
+                                                            output_dim=4)
+
+    @tf.function(
+        input_signature=({"itemtags": tf.TensorSpec(shape=(None, None), dtype=tf.dtypes.string, name="itemtags")},))
     def call(self, inputs):
         tags_lookup = self.usertags_vector(inputs.get("itemtags"))
         user_embedding = tf.math.reduce_sum(self.usertags_embedding(tags_lookup), axis=1, keepdims=False)
@@ -77,55 +83,63 @@ age	usertags	itemtags
 19	e,s,g	n,c,m
 '''
 
-original_data =tf.data.TextLineDataset([get_full_path("data/test.csv")],num_parallel_reads=2)
-map_result = original_data.skip(1).map(lambda x:tf.strings.split(x,sep='\t'))\
-    .map(lambda x:{"user_features":{"age": [tf.strings.to_number(x[0],tf.float32)],"usertags":tf.strings.split(x[1],sep=',')},"item_features":{"itemtags":tf.strings.split(x[2],sep=',')}})
+
+def str_json(message):
+
+    return {
+        "user_features": {
+            "age": [tf.strings.to_number(message[0], tf.float32)],
+            "usertags": tf.pad(tf.strings.split(message[1], sep=','),[[0, 5]])[:5]
+        },
+        "item_features": {
+            "itemtags": tf.pad(tf.strings.split(message[2], sep=','),[[0, 5]])[:5]
+        }
+    }
 
 
+original_data = tf.data.TextLineDataset([get_full_path("data/test.csv")], num_parallel_reads=2)
+map_result = original_data.skip(1).map(lambda x: tf.strings.split(x, sep='\t')) \
+    .map(str_json)
 
-userTag_vocabulary =list(map_result.flat_map(lambda x: tf.data.Dataset.from_tensor_slices(x["user_features"]["usertags"])).unique().as_numpy_iterator())
-itemTag_vocabulary = list(map_result.flat_map(lambda x: tf.data.Dataset.from_tensor_slices(x["item_features"]["itemtags"])).unique().as_numpy_iterator())
+userTag_vocabulary = list(map_result.flat_map(
+    lambda x: tf.data.Dataset.from_tensor_slices(x["user_features"]["usertags"])).unique().as_numpy_iterator())
+itemTag_vocabulary = list(map_result.flat_map(
+    lambda x: tf.data.Dataset.from_tensor_slices(x["item_features"]["itemtags"])).unique().as_numpy_iterator())
 
 user_model = RecUserModel(userTag_vocabulary)
 item_model = RecItemModel(itemTag_vocabulary)
 #
 task = tfrs.tasks.Retrieval(metrics=tfrs.metrics.FactorizedTopK(
-    map_result.map(lambda x:x["item_features"]).batch(5).map(item_model),k=3
+    map_result.map(lambda x: x["item_features"]).batch(5).map(item_model), k=3
 )
 )
 
-
-item_rec_model = ItemRecModel(user_model,item_model,task)
+item_rec_model = ItemRecModel(user_model, item_model, task)
 
 item_rec_model.compile(optimizer=tf.keras.optimizers.Adagrad(0.5))
 
-model_file =get_full_path("saved_model/")
+model_file = get_full_path("saved_model/")
 callback = tf.keras.callbacks.ModelCheckpoint(filepath=model_file,
                                               save_weights_only=True,
                                               verbose=1)
 
-item_rec_model.fit(map_result.batch(2), epochs=3,callbacks=[callback])
+item_rec_model.fit(map_result.batch(2), epochs=3, callbacks=[callback])
 #
-tf.keras.models.save_model(user_model,get_full_path('user_model'))
-tf.keras.models.save_model(item_model,get_full_path('item_model'))
+tf.keras.models.save_model(user_model, get_full_path('user_model'))
+tf.keras.models.save_model(item_model, get_full_path('item_model'))
 ###############################检索样例#######################
 
 
-
-user_model =  tf.keras.models.load_model(get_full_path('user_model'),compile=False)
-item_model =  tf.keras.models.load_model(get_full_path('item_model'),compile=False)
-index = tfrs.layers.factorized_top_k.BruteForce(user_model,k=2)
+user_model = tf.keras.models.load_model(get_full_path('user_model'), compile=False)
+item_model = tf.keras.models.load_model(get_full_path('item_model'), compile=False)
+index = tfrs.layers.factorized_top_k.BruteForce(user_model, k=2)
 index.index_from_dataset(
-    map_result.map(lambda x:x["item_features"])
+    map_result.map(lambda x: x["item_features"])
         .batch(3)
         .map(lambda x: item_model(x)))
 
-print(user_model({"age":tf.constant([[11]],dtype=tf.float32),"usertags":tf.constant([["n","k"]])}))
+print(user_model({"age": tf.constant([[11]], dtype=tf.float32), "usertags": tf.constant([["n", "k"]])}))
 
 # # Get some recommendations.
-titles = index({"age":tf.constant([[11]],dtype=tf.float32),"usertags":tf.constant([["n","k"]],dtype=tf.string)})
+titles = index({"age": tf.constant([[11]], dtype=tf.float32), "usertags": tf.constant([["n", "k"]], dtype=tf.string)})
 print(f"Top 3 recommendations for user 42: {titles}")
-
-
-
-
